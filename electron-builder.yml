@@ -1,0 +1,39 @@
+appId: com.mdviewer.app
+productName: MD Viewer
+directories:
+  buildResources: resources
+  output: dist
+
+files:
+  - out/**/*
+  - node_modules/**/*
+  - package.json
+
+extraResources:
+  - from: resources/bin/markitdown_cli
+    to: bin/markitdown_cli
+
+win:
+  target: nsis
+  artifactName: "${productName}-Setup-${version}.${ext}"
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: MD Viewer
+
+fileAssociations:
+  - { ext: md,       name: Markdown Document,        description: Markdown File,     role: Editor }
+  - { ext: markdown, name: Markdown Document,        description: Markdown File,     role: Editor }
+  - { ext: pdf,      name: PDF Document,             description: PDF File,          role: Viewer }
+  - { ext: docx,     name: Word Document,            description: Word Document,     role: Viewer }
+  - { ext: xlsx,     name: Excel Spreadsheet,        description: Excel Spreadsheet, role: Viewer }
+  - { ext: pptx,     name: PowerPoint Presentation,  description: PowerPoint Slides, role: Viewer }
+  - { ext: html,     name: HTML Document,            description: HTML File,         role: Viewer }
+  - { ext: htm,      name: HTML Document,            description: HTML File,         role: Viewer }
+  - { ext: csv,      name: CSV File,                 description: CSV File,          role: Viewer }
+  - { ext: json,     name: JSON File,                description: JSON File,         role: Viewer }
+  - { ext: xml,      name: XML File,                 description: XML File,          role: Viewer }
