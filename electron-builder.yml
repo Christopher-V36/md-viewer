@@ -15,6 +15,7 @@ extraResources:
 
 win:
   target: nsis
+  icon: resources/icon.ico
   artifactName: "${productName}-Setup-${version}.${ext}"
 
 nsis:
@@ -26,14 +27,17 @@ nsis:
   shortcutName: MD Viewer
 
 fileAssociations:
-  - { ext: md,       name: Markdown Document,        description: Markdown File,     role: Editor }
-  - { ext: markdown, name: Markdown Document,        description: Markdown File,     role: Editor }
-  - { ext: pdf,      name: PDF Document,             description: PDF File,          role: Viewer }
-  - { ext: docx,     name: Word Document,            description: Word Document,     role: Viewer }
-  - { ext: xlsx,     name: Excel Spreadsheet,        description: Excel Spreadsheet, role: Viewer }
-  - { ext: pptx,     name: PowerPoint Presentation,  description: PowerPoint Slides, role: Viewer }
-  - { ext: html,     name: HTML Document,            description: HTML File,         role: Viewer }
-  - { ext: htm,      name: HTML Document,            description: HTML File,         role: Viewer }
-  - { ext: csv,      name: CSV File,                 description: CSV File,          role: Viewer }
-  - { ext: json,     name: JSON File,                description: JSON File,         role: Viewer }
-  - { ext: xml,      name: XML File,                 description: XML File,          role: Viewer }
+  # Los ProgId (campo `name`) deben ser unicos: electron-builder los escribe tal cual
+  # en HKCU\Software\Classes\<name>. Nombres genericos como "Markdown Document" los
+  # pisa cualquier otra app que use el mismo (p. ej. Notion).
+  - { ext: md,       name: MDViewer.md,       description: Markdown File,     role: Editor }
+  - { ext: markdown, name: MDViewer.markdown, description: Markdown File,     role: Editor }
+  - { ext: pdf,      name: MDViewer.pdf,      description: PDF File,          role: Viewer }
+  - { ext: docx,     name: MDViewer.docx,     description: Word Document,     role: Viewer }
+  - { ext: xlsx,     name: MDViewer.xlsx,     description: Excel Spreadsheet, role: Viewer }
+  - { ext: pptx,     name: MDViewer.pptx,     description: PowerPoint Slides, role: Viewer }
+  - { ext: html,     name: MDViewer.html,     description: HTML File,         role: Viewer }
+  - { ext: htm,      name: MDViewer.htm,      description: HTML File,         role: Viewer }
+  - { ext: csv,      name: MDViewer.csv,      description: CSV File,          role: Viewer }
+  - { ext: json,     name: MDViewer.json,     description: JSON File,         role: Viewer }
+  - { ext: xml,      name: MDViewer.xml,      description: XML File,          role: Viewer }
