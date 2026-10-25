@@ -5,12 +5,18 @@
 ; predeterminado. Esto ademas:
 ;   - agrega el ProgId a la lista "Abrir con" de cada extension
 ;   - registra la app en Software\Classes\Applications
+;   - le pone al ProgId el AppUserModelID de la app (como hace VS Code)
+;   - registra Capabilities + RegisteredApplications (como hace calibre)
 ; para que MD Viewer se pueda elegir como predeterminado desde Windows aunque
-; otra app se haya quedado con el UserChoice de esa extension.
+; otra app se haya quedado con el UserChoice de esa extension. El selector nuevo
+; de Windows 11 ("Selecciona una aplicacion para abrir este archivo") ignora las
+; apps que solo estan en Applications\ / OpenWithProgids sin esas dos cosas.
 ; ---------------------------------------------------------------------------
 
 !macro regOpenWith EXT PROGID
   WriteRegStr SHELL_CONTEXT "Software\Classes\.${EXT}\OpenWithProgids" "${PROGID}" ""
+  WriteRegStr SHELL_CONTEXT "Software\Classes\${PROGID}" "AppUserModelID" "${APP_ID}"
+  WriteRegStr SHELL_CONTEXT "Software\MDViewer\Capabilities\FileAssociations" ".${EXT}" "${PROGID}"
   WriteRegStr SHELL_CONTEXT "Software\Classes\Applications\${APP_EXECUTABLE_FILENAME}\SupportedTypes" ".${EXT}" ""
   ; electron-builder escribe este comando sin comillas; con espacios en la ruta Windows lo descarta del selector "Abrir con".
   WriteRegStr SHELL_CONTEXT "Software\Classes\${PROGID}\shell\open\command" "" '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" "%1"'
@@ -25,7 +31,12 @@
   WriteRegStr SHELL_CONTEXT "Software\Classes\Applications\${APP_EXECUTABLE_FILENAME}\shell\open\command" "" '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" "%1"'
   WriteRegStr SHELL_CONTEXT "Software\Classes\Applications\${APP_EXECUTABLE_FILENAME}\DefaultIcon" "" "$INSTDIR\${APP_EXECUTABLE_FILENAME},0"
 
-  !insertmacro regOpenWith "md"       "MDViewer.md"
+  WriteRegStr SHELL_CONTEXT "Software\MDViewer\Capabilities" "ApplicationName" "MD Viewer"
+  WriteRegStr SHELL_CONTEXT "Software\MDViewer\Capabilities" "ApplicationDescription" "Visor y editor de Markdown"
+  WriteRegStr SHELL_CONTEXT "Software\MDViewer\Capabilities" "ApplicationIcon" "$INSTDIR\${APP_EXECUTABLE_FILENAME},0"
+  WriteRegStr SHELL_CONTEXT "Software\RegisteredApplications" "MD Viewer" "Software\MDViewer\Capabilities"
+
+  !insertmacro regOpenWith "md"      "MDViewer.md"
   !insertmacro regOpenWith "markdown" "MDViewer.markdown"
   !insertmacro regOpenWith "pdf"      "MDViewer.pdf"
   !insertmacro regOpenWith "docx"     "MDViewer.docx"
@@ -54,5 +65,7 @@
   !insertmacro unregOpenWith "xml"      "MDViewer.xml"
 
   DeleteRegKey SHELL_CONTEXT "Software\Classes\Applications\${APP_EXECUTABLE_FILENAME}"
+  DeleteRegValue SHELL_CONTEXT "Software\RegisteredApplications" "MD Viewer"
+  DeleteRegKey SHELL_CONTEXT "Software\MDViewer"
   System::Call "shell32::SHChangeNotify(i,i,i,i) (0x08000000, 0x1000, 0, 0)"
 !macroend

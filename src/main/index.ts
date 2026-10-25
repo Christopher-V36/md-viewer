@@ -123,6 +123,10 @@ app.on('second-instance', (_event, argv) => {
   }
 })
 
+// Same id the NSIS installer stamps on the shortcuts and file-association ProgIds
+// (electron-builder.yml appId); Windows uses it to tie "Open with" entries to this app.
+app.setAppUserModelId('com.mdviewer.app')
+
 app.whenReady().then(() => {
   createWindow()
   // Warm the converter in the background after the UI is up — Windows caches
