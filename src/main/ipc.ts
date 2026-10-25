@@ -14,6 +14,25 @@ const watchedFiles = new Map<string, (curr: import('fs').Stats, prev: import('fs
 // renderer also guards via convertingRef). The cancel-conversion IPC calls it.
 let activeConversion: { cancel: () => void } | null = null
 
+// Files with unsaved edits, reported by the renderer. While this is non-empty
+// the window refuses to close until the renderer has walked the user through
+// the "save changes?" prompt and answered via `confirm-close`.
+let unsavedFiles: string[] = []
+let closeApproved = false
+
+export function shouldBlockClose(): boolean {
+  return unsavedFiles.length > 0 && !closeApproved
+}
+
+export function resetCloseGuard() {
+  unsavedFiles = []
+  closeApproved = false
+}
+
+export function isCloseApproved(): boolean {
+  return closeApproved
+}
+
 function startWatching(filePath: string, win: BrowserWindow) {
   if (watchedFiles.has(filePath)) return
   const listener = (curr: import('fs').Stats, prev: import('fs').Stats) => {
@@ -110,6 +129,26 @@ export function registerIpcHandlers(win: BrowserWindow) {
     const content = readFileSync(filePath, 'utf-8')
     store.addRecentFile(filePath)
     return content
+  })
+
+  ipcMain.handle('save-file', async (_event, filePath: string, content: string) => {
+    // Editing is only offered for Markdown; refuse anything else so a stray
+    // call can't overwrite an arbitrary file type.
+    if (!/\.(md|markdown)$/i.test(filePath)) {
+      throw new Error('Solo se pueden guardar archivos Markdown')
+    }
+    await writeFile(filePath, content, 'utf-8')
+  })
+
+  ipcMain.handle('set-unsaved-files', (_event, files: string[]) => {
+    unsavedFiles = Array.isArray(files) ? files : []
+  })
+
+  // The renderer has resolved every unsaved tab (saved or discarded) — let the
+  // close that was held back go through.
+  ipcMain.handle('confirm-close', () => {
+    closeApproved = true
+    if (!win.isDestroyed()) win.close()
   })
 
   ipcMain.handle('convert-file', async (_event, inputPath: string): Promise<string> => {

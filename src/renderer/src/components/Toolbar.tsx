@@ -30,6 +30,15 @@ interface Props {
   onSplitView: (() => void) | null
   onPresentation: (() => void) | null
   onGlobalSearch: (() => void) | null
+  // Editing — null when the open file isn't Markdown (or nothing is open).
+  onToggleEdit: (() => void) | null
+  editing: boolean
+  unsaved: boolean
+  onSave: (() => void) | null
+  savedBadge: boolean
+  // Live preview beside the editor — null outside edit mode.
+  previewOpen: boolean
+  onTogglePreview: (() => void) | null
 }
 
 const IconMenu = () => (
@@ -119,6 +128,31 @@ const IconClock = () => (
     <path d="M8 4.5V8l2.25 1.5" />
   </svg>
 )
+const IconEdit = () => (
+  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M10.5 2.5l3 3L5.5 13.5l-3.5.5.5-3.5 8-8z" />
+    <path d="M9 4l3 3" />
+  </svg>
+)
+const IconEye = () => (
+  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M1 8s2.5-4.5 7-4.5S15 8 15 8s-2.5 4.5-7 4.5S1 8 1 8z" />
+    <circle cx="8" cy="8" r="2" />
+  </svg>
+)
+const IconPreview = () => (
+  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+    <line x1="8" y1="2.5" x2="8" y2="13.5" />
+    <path d="M10 6h2.5M10 8.5h2.5M10 11h1.5" />
+  </svg>
+)
+const IconSave = () => (
+  <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M2.5 2.5h8.2l2.8 2.8v8.2a1 1 0 01-1 1h-10a1 1 0 01-1-1v-10a1 1 0 011-1z" />
+    <path d="M5 2.5v3.5h5V2.5M5 14v-4.5h6V14" />
+  </svg>
+)
 const IconSliders = () => (
   <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
     <line x1="2" y1="4" x2="14" y2="4"/>
@@ -137,7 +171,9 @@ export default function Toolbar({
   onGoHome, onSaveAsPdf, onRevealFile, onClearRecent,
   onCopyMarkdown, zoom, onZoomIn, onZoomOut, onZoomReset,
   recentsPanelOpen, onToggleRecentsPanel,
-  onSplitView, onPresentation, onGlobalSearch
+  onSplitView, onPresentation, onGlobalSearch,
+  onToggleEdit, editing, unsaved, onSave, savedBadge,
+  previewOpen, onTogglePreview
 }: Props) {
   const dir = filePath ? (filePath.split(/[/\\]/).slice(0, -1).join('/') || filePath) : null
   const [menuOpen, setMenuOpen] = useState(false)
@@ -246,8 +282,8 @@ export default function Toolbar({
           </button>
         )}
 
-        {/* Sidebar toggle — only when a file is open */}
-        {filePath && (
+        {/* Sidebar toggle — only when a file is open (the TOC is for the rendered view) */}
+        {filePath && !editing && (
           <button
             className={`toolbar-btn ${sidebarOpen ? 'toolbar-btn--active' : ''}`}
             onClick={onToggleSidebar}
@@ -265,10 +301,48 @@ export default function Toolbar({
           </div>
         )}
         {updatedBadge && <span className="updated-badge">Actualizado</span>}
+        {savedBadge && <span className="updated-badge">Guardado</span>}
         {copiedBadge && <span className="copied-badge">¡Copiado!</span>}
       </div>
 
       <div className="toolbar-right">
+        {/* Edit / view toggle — Markdown files only */}
+        {onToggleEdit && (
+          <button
+            className={`toolbar-btn toolbar-btn--label ${editing ? 'toolbar-btn--active' : ''}`}
+            onClick={onToggleEdit}
+            title={editing ? 'Volver a la vista (Ctrl+E)' : 'Editar documento (Ctrl+E)'}
+          >
+            {editing ? <IconEye /> : <IconEdit />}
+            <span>{editing ? 'Ver' : 'Editar'}</span>
+          </button>
+        )}
+
+        {/* Live preview toggle — edit mode only */}
+        {onTogglePreview && (
+          <button
+            className={`toolbar-btn ${previewOpen ? 'toolbar-btn--active' : ''}`}
+            onClick={onTogglePreview}
+            title={previewOpen ? 'Ocultar vista previa' : 'Mostrar vista previa en vivo'}
+            aria-pressed={previewOpen}
+          >
+            <IconPreview />
+          </button>
+        )}
+
+        {/* Save — appears in edit mode, lights up once there is something to save */}
+        {editing && onSave && (
+          <button
+            className={`save-btn ${unsaved ? 'save-btn--dirty' : ''}`}
+            onClick={onSave}
+            disabled={!unsaved}
+            title={unsaved ? 'Guardar cambios (Ctrl+S)' : 'No hay cambios por guardar'}
+          >
+            <IconSave />
+            <span>Guardar</span>
+          </button>
+        )}
+
         {/* Zoom controls — only when a file is open */}
         {filePath && (
           <div className="zoom-controls">
@@ -305,8 +379,8 @@ export default function Toolbar({
           </button>
         )}
 
-        {/* Search — only when a file is open */}
-        {filePath && (
+        {/* Search — only when a file is open and rendered */}
+        {filePath && !editing && (
           <button
             className={`toolbar-btn ${searchOpen ? 'toolbar-btn--active' : ''}`}
             onClick={onSearch}

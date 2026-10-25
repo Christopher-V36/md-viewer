@@ -13,8 +13,12 @@ import RecentsPanel from './components/RecentsPanel'
 import GlobalSearchPanel from './components/GlobalSearchPanel'
 import SplitView from './components/SplitView'
 import PresentationMode from './components/PresentationMode'
+import EditView from './components/EditView'
+import { useDebouncedValue } from './hooks/useDebouncedValue'
+import UnsavedDialog, { type UnsavedChoice } from './components/UnsavedDialog'
 import { DEMO_CONTENT, DEMO_PATH } from './demo'
 import { classify, basename } from './supported'
+import { isEditable, toLf, withOriginalEol, hasUnsavedChanges, withDiskContent } from './editing'
 import type { Tab } from './types'
 
 const api = () => window.api
@@ -122,6 +126,12 @@ export default function App() {
   const [splitViewOpen, setSplitViewOpen] = useState(false)
   const [splitRightTabId, setSplitRightTabId] = useState<string | null>(null)
   const [presentationMode, setPresentationMode] = useState(false)
+  const [savedBadge, setSavedBadge] = useState(false)
+  const [showPreview, setShowPreview] = useState(true)
+  // File name shown in the "save changes?" dialog, or null when it's closed.
+  const [unsavedPrompt, setUnsavedPrompt] = useState<string | null>(null)
+  const promptResolverRef = useRef<((choice: UnsavedChoice) => void) | null>(null)
+  const allowUnloadRef = useRef(false)
 
   // Derived: the active tab and its file/content. Single source of truth so
   // all the file-related effects key off the active tab.
@@ -132,15 +142,25 @@ export default function App() {
   const filePath = activeTab?.filePath ?? null
   const content = activeTab?.content ?? null
   const hasFile = activeTab !== null
+  const isEditing = !!activeTab?.editing
+  const canEdit = filePath !== null && isEditable(filePath)
+  const unsaved = activeTab ? hasUnsavedChanges(activeTab) : false
+  const unsavedKey = tabs.filter(hasUnsavedChanges).map(t => t.filePath).join('\n')
 
   // Refs to avoid stale closures inside global keyboard handlers.
   const activeTabIdRef = useRef<string | null>(null)
   activeTabIdRef.current = activeTabId
   const tabsRef = useRef<Tab[]>([])
   tabsRef.current = tabs
+  const hasUnsavedRef = useRef(false)
+  hasUnsavedRef.current = unsavedKey !== ''
 
   const { pairId, mode, fontId, setTheme, setMode, setFont, toggleMode, isDark } = useTheme()
-  const { html, toc, frontmatter } = useMarkdown(content, filePath)
+  // While editing, the preview renders the draft — debounced so a fast typist
+  // doesn't re-run markdown-it (and Mermaid) on every keystroke.
+  const draft = isEditing ? activeTab?.draft ?? null : null
+  const debouncedDraft = useDebouncedValue(draft, 250, activeTabId)
+  const { html, toc, frontmatter } = useMarkdown(isEditing ? (debouncedDraft ?? content) : content, filePath)
 
   // Demo content for non-Electron contexts (storybook / web preview). Opens
   // as a synthetic tab so the rest of the app sees a normal state shape.
@@ -160,7 +180,7 @@ export default function App() {
         // Already open — switch to it and refresh content in case the file
         // changed on disk between opens.
         setActiveTabId(existing.id)
-        return prev.map(t => t.filePath === path ? { ...t, content: transformedContent } : t)
+        return prev.map(t => t.filePath === path ? withDiskContent(t, transformedContent) : t)
       }
       const newTab: Tab = { id: makeTabId(), filePath: path, content: transformedContent }
       setActiveTabId(newTab.id)
@@ -194,6 +214,86 @@ export default function App() {
       return next
     })
   }, [])
+
+  // ── Editing ───────────────────────────────────────────────────────────────
+  const updateTab = useCallback((id: string, patch: Partial<Tab>) => {
+    setTabs(prev => prev.map(t => t.id === id ? { ...t, ...patch } : t))
+  }, [])
+
+  // Resolves with the user's answer to "save changes?". Only one prompt can be
+  // open at a time; a second request while one is showing counts as Cancel.
+  const askUnsaved = useCallback((tab: Tab) => new Promise<UnsavedChoice>(resolve => {
+    if (promptResolverRef.current) { resolve('cancel'); return }
+    promptResolverRef.current = resolve
+    setUnsavedPrompt(basename(tab.filePath))
+  }), [])
+
+  const answerUnsaved = useCallback((choice: UnsavedChoice) => {
+    const resolve = promptResolverRef.current
+    promptResolverRef.current = null
+    setUnsavedPrompt(null)
+    resolve?.(choice)
+  }, [])
+
+  // Writes the tab's draft to disk. Resolves true when there is nothing left
+  // to save (saved, or nothing changed), false when the write failed.
+  const saveTab = useCallback(async (id: string): Promise<boolean> => {
+    const tab = tabsRef.current.find(t => t.id === id)
+    if (!tab || !hasUnsavedChanges(tab)) return true
+    const text = withOriginalEol(tab.draft!, tab.content)
+    try {
+      if (IS_ELECTRON) await api()!.saveFile(tab.filePath, text)
+    } catch (e) {
+      const msg = (e instanceof Error ? e.message : String(e))
+        .replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
+      alert(`No se pudo guardar «${basename(tab.filePath)}»:\n${msg}`)
+      return false
+    }
+    // Only `content` moves: anything typed while the write was in flight stays
+    // in the draft and keeps the tab marked as modified.
+    updateTab(id, { content: text })
+    setSavedBadge(true)
+    setTimeout(() => setSavedBadge(false), 2000)
+    return true
+  }, [updateTab])
+
+  // Asks what to do with unsaved edits in `tab`. Resolves true when it is safe
+  // to carry on (saved or discarded), false when the user cancelled or saving failed.
+  const resolveUnsaved = useCallback(async (tab: Tab): Promise<boolean> => {
+    if (!hasUnsavedChanges(tab)) return true
+    const choice = await askUnsaved(tab)
+    if (choice === 'cancel') return false
+    if (choice === 'save') return saveTab(tab.id)
+    return true
+  }, [askUnsaved, saveTab])
+
+  const handleToggleEdit = useCallback(async () => {
+    const tab = tabsRef.current.find(t => t.id === activeTabIdRef.current)
+    if (!tab || !isEditable(tab.filePath)) return
+    if (!tab.editing) {
+      updateTab(tab.id, { editing: true, draft: toLf(tab.content) })
+      // Neither split view nor search apply to the raw editor.
+      setSplitViewOpen(false)
+      setSplitRightTabId(null)
+      setSearchOpen(false)
+      setSearchQuery('')
+      setSearchMatches({ current: 0, total: 0 })
+      return
+    }
+    if (!(await resolveUnsaved(tab))) return
+    updateTab(tab.id, { editing: false, draft: undefined })
+  }, [updateTab, resolveUnsaved])
+
+  const handleSave = useCallback(() => {
+    const id = activeTabIdRef.current
+    if (id) saveTab(id)
+  }, [saveTab])
+
+  const requestCloseTab = useCallback(async (id: string) => {
+    const tab = tabsRef.current.find(t => t.id === id)
+    if (tab && !(await resolveUnsaved(tab))) return
+    closeTab(id)
+  }, [resolveUnsaved, closeTab])
 
   const reorderTabs = useCallback((fromIdx: number, toIdx: number) => {
     setTabs(prev => {
@@ -295,13 +395,15 @@ export default function App() {
   const handleZoomOut = useCallback(() => setZoom(z => Math.max(0.5, parseFloat((z - 0.1).toFixed(1)))), [])
   const handleZoomReset = useCallback(() => setZoom(1), [])
 
+  // While editing, "copy source" copies what is in the editor, not the last save.
+  const sourceText = (isEditing ? activeTab?.draft : undefined) ?? content
   const handleCopyMarkdown = useCallback(() => {
-    if (!content) return
-    navigator.clipboard.writeText(content).then(() => {
+    if (!sourceText) return
+    navigator.clipboard.writeText(sourceText).then(() => {
       setCopiedBadge(true)
       setTimeout(() => setCopiedBadge(false), 2000)
     })
-  }, [content])
+  }, [sourceText])
 
   // Global drag-and-drop: handle drops anywhere in the app
   const handleRootDragOver = useCallback((e: React.DragEvent) => {
@@ -342,14 +444,47 @@ export default function App() {
       return
     }
     const name = filePath.split(/[/\\]/).pop()
-    api()?.setWindowTitle(`${name} — MD Viewer`)
-  }, [filePath])
+    api()?.setWindowTitle(`${unsaved ? '● ' : ''}${name} — MD Viewer`)
+  }, [filePath, unsaved])
 
   // Register an OS-level file watch for every open tab. The main process
-  // dedupes by path, so re-watching is cheap.
+  // dedupes by path, so re-watching is cheap. Keyed on the set of paths (not
+  // `tabs`) so typing in the editor doesn't fire IPC on every keystroke.
+  const watchKey = tabs.map(t => t.filePath).join('\n')
   useEffect(() => {
-    tabs.forEach(t => { api()?.watchFile(t.filePath) })
-  }, [tabs])
+    if (watchKey) watchKey.split('\n').forEach(p => { api()?.watchFile(p) })
+  }, [watchKey])
+
+  // Tell the main process which files have unsaved edits so it can hold the
+  // window open (Word-style) instead of closing over them.
+  useEffect(() => {
+    api()?.setUnsavedFiles(unsavedKey ? unsavedKey.split('\n') : [])
+  }, [unsavedKey])
+
+  // Window close with unsaved edits: main holds the close and asks us to walk
+  // through each modified tab. Only when all are saved/discarded do we let it go.
+  useEffect(() => {
+    return api()?.onConfirmCloseRequested(async () => {
+      for (const tab of tabsRef.current.filter(hasUnsavedChanges)) {
+        switchTab(tab.id)
+        if (!(await resolveUnsaved(tab))) return
+      }
+      allowUnloadRef.current = true
+      await api()?.confirmClose()
+    })
+  }, [resolveUnsaved, switchTab])
+
+  // Reloading the page would drop the drafts too — ask first (main shows the
+  // native confirmation via will-prevent-unload).
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (!hasUnsavedRef.current || allowUnloadRef.current) return
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [])
 
   // Auto-reload: when any watched file changes on disk, refresh the matching
   // tab regardless of whether it's the active one — the user sees the update
@@ -361,10 +496,14 @@ export default function App() {
       if (text === undefined) return
       const transformed = transformForDisplay(text, path)
       const currentActiveId = activeTabIdRef.current
+      // Nothing to apply when the text is what we already hold (that's our own
+      // save echoing back) or when the tab has unsaved edits we must not clobber.
+      const isStale = (t: Tab) => t.filePath === path && t.content !== transformed && !hasUnsavedChanges(t)
+      if (!tabsRef.current.some(isStale)) return
       setTabs(prev => prev.map(t => {
-        if (t.filePath !== path) return t
+        if (!isStale(t)) return t
         const isActive = t.id === currentActiveId
-        return { ...t, content: transformed, dirty: isActive ? false : true }
+        return { ...withDiskContent(t, transformed), dirty: isActive ? false : true }
       }))
       // Flash the badge only if the change is to the file the user is looking at.
       const activeT = tabsRef.current.find(t => t.id === currentActiveId)
@@ -383,9 +522,14 @@ export default function App() {
 
   // Keyboard shortcuts
   useEffect(() => {
+    const activeIsEditing = () =>
+      !!tabsRef.current.find(t => t.id === activeTabIdRef.current)?.editing
+
     const handler = (e: KeyboardEvent) => {
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === 's' || e.key === 'S')) { e.preventDefault(); handleSave(); return }
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === 'e' || e.key === 'E')) { e.preventDefault(); handleToggleEdit(); return }
       if (e.ctrlKey && e.shiftKey && (e.key === 'f' || e.key === 'F')) { e.preventDefault(); setGlobalSearchOpen(v => !v); return }
-      if (e.ctrlKey && e.key === 'f') { e.preventDefault(); setSearchOpen(v => !v); return }
+      if (e.ctrlKey && e.key === 'f') { e.preventDefault(); if (!activeIsEditing()) setSearchOpen(v => !v); return }
       if (e.ctrlKey && e.key === '\\') { e.preventDefault(); setSidebarOpen(v => !v); return }
       if (e.ctrlKey && (e.key === '=' || e.key === '+')) { e.preventDefault(); setZoom(z => Math.min(2, parseFloat((z + 0.1).toFixed(1)))); return }
       if (e.ctrlKey && e.key === '-') { e.preventDefault(); setZoom(z => Math.max(0.5, parseFloat((z - 0.1).toFixed(1)))); return }
@@ -396,7 +540,7 @@ export default function App() {
       if (e.ctrlKey && (e.key === 'w' || e.key === 'W') && !e.altKey) {
         e.preventDefault()
         const id = activeTabIdRef.current
-        if (id) closeTab(id)
+        if (id) requestCloseTab(id)
         return
       }
       if (e.ctrlKey && e.key === 'Tab') {
@@ -421,7 +565,7 @@ export default function App() {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [closeTab, switchTab])
+  }, [requestCloseTab, switchTab, handleSave, handleToggleEdit])
 
   const filename = filePath ? filePath.split(/[/\\]/).pop() || filePath : null
 
@@ -458,16 +602,23 @@ export default function App() {
         onZoomReset={handleZoomReset}
         recentsPanelOpen={recentsPanelOpen}
         onToggleRecentsPanel={() => setRecentsPanelOpen(v => !v)}
-        onSplitView={hasFile ? () => { setSplitViewOpen(v => !v); setSplitRightTabId(null) } : null}
-        onPresentation={hasFile ? () => setPresentationMode(true) : null}
+        onSplitView={hasFile && !isEditing ? () => { setSplitViewOpen(v => !v); setSplitRightTabId(null) } : null}
+        onPresentation={hasFile && !isEditing ? () => setPresentationMode(true) : null}
         onGlobalSearch={tabs.length > 0 ? () => setGlobalSearchOpen(v => !v) : null}
+        onToggleEdit={canEdit ? handleToggleEdit : null}
+        editing={isEditing}
+        unsaved={unsaved}
+        onSave={isEditing ? handleSave : null}
+        savedBadge={savedBadge}
+        previewOpen={showPreview}
+        onTogglePreview={isEditing ? () => setShowPreview(v => !v) : null}
       />
       {tabs.length > 0 && (
         <TabBar
           tabs={tabs}
           activeTabId={activeTabId}
           onSwitchTab={switchTab}
-          onCloseTab={closeTab}
+          onCloseTab={requestCloseTab}
           onReorderTabs={reorderTabs}
         />
       )}
@@ -488,17 +639,29 @@ export default function App() {
             />
           ) : (
             <>
-              {sidebarOpen && (
+              {sidebarOpen && !isEditing && (
                 <Sidebar toc={toc} frontmatter={frontmatter} activeHeading={activeHeading} width={sidebarWidth} onWidthChange={setSidebarWidth} />
               )}
-              <MarkdownView
-                html={html}
-                searchQuery={searchOpen ? searchQuery : ''}
-                onActiveHeadingChange={setActiveHeading}
-                onSearchMatchesChange={(current, total) => setSearchMatches({ current, total })}
-                zoom={zoom}
-                isDark={isDark}
-              />
+              {isEditing ? (
+                <EditView
+                  key={activeTab!.id}
+                  draft={activeTab!.draft ?? ''}
+                  onChange={text => updateTab(activeTab!.id, { draft: text })}
+                  html={html}
+                  showPreview={showPreview}
+                  zoom={zoom}
+                  isDark={isDark}
+                />
+              ) : (
+                <MarkdownView
+                  html={html}
+                  searchQuery={searchOpen ? searchQuery : ''}
+                  onActiveHeadingChange={setActiveHeading}
+                  onSearchMatchesChange={(current, total) => setSearchMatches({ current, total })}
+                  zoom={zoom}
+                  isDark={isDark}
+                />
+              )}
             </>
           )
         ) : (
@@ -522,7 +685,7 @@ export default function App() {
           />
         )}
       </div>
-      {searchOpen && hasFile && (
+      {searchOpen && hasFile && !isEditing && (
         <SearchPanel
           query={searchQuery}
           onQueryChange={setSearchQuery}
@@ -562,6 +725,9 @@ export default function App() {
           name={converting}
           onCancel={() => { api()?.cancelConversion() }}
         />
+      )}
+      {unsavedPrompt && (
+        <UnsavedDialog name={unsavedPrompt} onChoice={answerUnsaved} />
       )}
     </div>
   )

@@ -1,8 +1,11 @@
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, dialog, shell } from 'electron'
 import { join } from 'path'
 import { existsSync } from 'fs'
 import { store } from './store'
-import { registerIpcHandlers, stopWatching, prewarmConverter } from './ipc'
+import {
+  registerIpcHandlers, stopWatching, prewarmConverter,
+  shouldBlockClose, isCloseApproved, resetCloseGuard
+} from './ipc'
 import { setMenu, refreshMenu } from './menu'
 
 // Enforce single instance
@@ -54,15 +57,42 @@ function createWindow() {
     }
   })
 
-  // Save window size on close
-  mainWindow.on('close', () => {
+  // Unsaved edits: hold the close back and let the renderer run the Word-style
+  // "save changes?" prompt. It calls `confirm-close` once every tab is resolved,
+  // which re-triggers this event with the guard released.
+  mainWindow.on('close', (e) => {
     if (!mainWindow) return
+    if (shouldBlockClose()) {
+      e.preventDefault()
+      mainWindow.webContents.send('confirm-close-requested')
+      return
+    }
+    // Save window size on close
     const [width, height] = mainWindow.getSize()
     const [x, y] = mainWindow.getPosition()
     store.set('windowBounds', { width, height, x, y })
   })
 
-  mainWindow.on('closed', () => { mainWindow = null })
+  // A reload (View → Reload / Ctrl+R) would silently throw the drafts away, so
+  // the renderer's beforeunload guard blocks it and we ask here instead.
+  mainWindow.webContents.on('will-prevent-unload', (event) => {
+    if (isCloseApproved()) { event.preventDefault(); return }
+    const choice = dialog.showMessageBoxSync(mainWindow!, {
+      type: 'warning',
+      buttons: ['Cancelar', 'Descartar cambios y recargar'],
+      defaultId: 0,
+      cancelId: 0,
+      title: 'MD Viewer',
+      message: 'Hay cambios sin guardar.',
+      detail: 'Si recargas ahora, se perderán los cambios que no hayas guardado.'
+    })
+    if (choice === 1) event.preventDefault()
+  })
+
+  mainWindow.on('closed', () => {
+    mainWindow = null
+    resetCloseGuard()
+  })
 
   // Open external links in browser
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {

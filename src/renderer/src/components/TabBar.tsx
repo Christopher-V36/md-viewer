@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import type { Tab } from '../types'
 import { basename } from '../supported'
+import { hasUnsavedChanges } from '../editing'
 
 interface Props {
   tabs: Tab[]
@@ -70,7 +71,9 @@ export default function TabBar({ tabs, activeTabId, onSwitchTab, onCloseTab, onR
               role="tab"
               aria-selected={isActive}
             >
-              {tab.dirty && <span className="tab-dirty" aria-label="Modificado" />}
+              {hasUnsavedChanges(tab)
+                ? <span className="tab-unsaved" role="img" aria-label="Cambios sin guardar" />
+                : tab.dirty && <span className="tab-dirty" aria-label="Modificado" />}
               {basename(tab.filePath)}
             </button>
             <button

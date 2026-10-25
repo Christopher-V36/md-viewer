@@ -10,6 +10,21 @@ contextBridge.exposeInMainWorld('api', {
   readFile: (filePath: string): Promise<string> =>
     ipcRenderer.invoke('read-file', filePath),
 
+  saveFile: (filePath: string, content: string): Promise<void> =>
+    ipcRenderer.invoke('save-file', filePath, content),
+
+  setUnsavedFiles: (files: string[]): Promise<void> =>
+    ipcRenderer.invoke('set-unsaved-files', files),
+
+  confirmClose: (): Promise<void> =>
+    ipcRenderer.invoke('confirm-close'),
+
+  onConfirmCloseRequested: (callback: () => void): (() => void) => {
+    const handler = () => callback()
+    ipcRenderer.on('confirm-close-requested', handler)
+    return () => ipcRenderer.removeListener('confirm-close-requested', handler)
+  },
+
   convertFile: (inputPath: string): Promise<string> =>
     ipcRenderer.invoke('convert-file', inputPath),
 

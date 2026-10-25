@@ -5,6 +5,10 @@ export interface Tab {
   content: string
   // True when the file changed on disk but the user hasn't viewed the tab yet.
   dirty?: boolean
+  // Edit mode (Markdown files only). `draft` is the text in the editor, always
+  // LF-normalised; it differs from `content` once the user has unsaved changes.
+  editing?: boolean
+  draft?: string
 }
 
 export interface TOCItem {
@@ -42,6 +46,10 @@ declare global {
       openFile: () => Promise<string | null>
       openConvertDialog: () => Promise<string | null>
       readFile: (filePath: string) => Promise<string>
+      saveFile: (filePath: string, content: string) => Promise<void>
+      setUnsavedFiles: (files: string[]) => Promise<void>
+      confirmClose: () => Promise<void>
+      onConfirmCloseRequested: (callback: () => void) => () => void
       convertFile: (inputPath: string) => Promise<string>
       cancelConversion: () => Promise<void>
       getFilePath: (file: File) => string
